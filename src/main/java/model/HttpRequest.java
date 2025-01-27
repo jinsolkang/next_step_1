@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.Field;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -62,18 +63,11 @@ public class HttpRequest {
     }
 
     private void matchField(Map<String, String> fields) {
-        Class<?> clazz = this.getClass();
-
-        for (Map.Entry<String, String> entry : fields.entrySet()) {
-            String headerKey = entry.getKey();
-            String headerValue = entry.getValue();
-
-            try {
-                Field field = clazz.getDeclaredField(headerKey);
-                field.setAccessible(true);
-                field.set(this, headerValue);
-            } catch (NoSuchFieldException | IllegalAccessException ignored) {}
-        }
+        this.host = fields.get("Host") == null ? "" : fields.get("Host");
+        this.connection = fields.get("Connection") == null ? "" : fields.get("Connection");
+        this.contentLength = fields.get("Content-Length") == null ? 0 : Integer.parseInt(fields.get("Content-Length"));
+        this.contentType = fields.get("Content-type") == null ? "" : fields.get("Content-type");
+        this.accept = fields.get("Accept") == null ? "" : fields.get("Accept");
     }
 
     private void setBody(BufferedReader br) throws IOException {
@@ -116,7 +110,7 @@ public class HttpRequest {
     }
 
     public Map<String, String> getBody() {
-        return body;
+        return body == null ? Collections.emptyMap() : body;
     }
 
     public String getCookie() {

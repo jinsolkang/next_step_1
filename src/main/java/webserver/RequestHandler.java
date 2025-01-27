@@ -5,9 +5,13 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.BiConsumer;
 
+import db.DataBase;
 import model.HttpRequest;
 import model.HttpResponse;
+import model.SecurityRules;
+import model.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,11 +20,31 @@ public class RequestHandler extends Thread {
 
     private final Socket connection;
 
-    private static final Map<String, Runnable> urlMappings = new HashMap<>();
+    private static final RequestHandler INSTANCE = new RequestHandler();
+
+    private static final Map<String, BiConsumer<HttpRequest, OutputStream>> urlMappings = new HashMap<>();
 
     static {
-        urlMappings.put("POST/user/create", RequestHandler::createUser);
+        urlMappings.put("POST/user/create", wrapException(INSTANCE::createUser));
+        urlMappings.put("POST/user/login", wrapException(INSTANCE::login));
     }
+
+    private static <T, U> BiConsumer<T, U> wrapException(
+            ThrowingBiConsumer<T, U, Exception> throwingConsumer) {
+        return (t, u) -> {
+            try {
+                throwingConsumer.accept(t, u);
+            } catch (Exception e) {
+                throw new RuntimeException("Error while handling request", e);
+            }
+        };
+    }
+
+    private interface ThrowingBiConsumer<T, U, E extends Exception> {
+        void accept(T t, U u) throws E;
+    }
+
+    private RequestHandler() {this.connection = null;}
 
     public RequestHandler(Socket connectionSocket) {
         this.connection = connectionSocket;
@@ -33,31 +57,41 @@ public class RequestHandler extends Thread {
         try (InputStream in = connection.getInputStream(); OutputStream out = connection.getOutputStream()) {
             // TODO 사용자 요청에 대한 처리는 이 곳에 구현하면 된다.
             HttpRequest httpRequest = new HttpRequest(in);
-            handleRequest(out, httpRequest);
+            log.info("method: {}", httpRequest.getMethod());
+            log.info("url: {}", httpRequest.getUrl());
+            handleRequest(httpRequest, out);
         } catch (IOException e) {
             log.error(e.getMessage());
         }
     }
 
-    private void handleRequest(OutputStream out, HttpRequest httpRequest) throws IOException {
+    private void handleRequest(HttpRequest httpRequest, OutputStream out) throws IOException {
+        if(unauthorized(httpRequest)) {
+            response303Header(new DataOutputStream(out), "/user/login.html");
+            return;
+        }
+
         String key = httpRequest.getMethod() + httpRequest.getUrl();
-        Runnable runnable = urlMappings.get(key);
-        if (runnable != null) {
-            runnable.run();
+        BiConsumer<HttpRequest, OutputStream> handler = urlMappings.get(key);
+        if (handler != null) {
+            handler.accept(httpRequest, out);
         } else {
-            defaultResponse(out, httpRequest);
+            defaultResponse(httpRequest, out);
         }
     }
 
-    private void defaultResponse(OutputStream out, HttpRequest httpRequest) throws IOException {
+    private boolean unauthorized(HttpRequest httpRequest) {
+        String cookie = httpRequest.getCookie();
+        return SecurityRules.isProtectedPage(httpRequest.getUrl()) &&
+                (cookie == null || !cookie.equals("logined=true"));
+    }
+
+    private void defaultResponse(HttpRequest httpRequest, OutputStream out) throws IOException {
         DataOutputStream dos = new DataOutputStream(out);
         HttpResponse httpResponse = new HttpResponse();
 
         File file = getFile(httpRequest);
         setBody(file, httpResponse);
-
-        log.info("Request URL: {}", file.getPath());
-        log.info("Response Status: 200 OK");
 
         response200Header(dos, httpResponse);
         responseBody(dos, httpResponse);
@@ -89,7 +123,7 @@ public class RequestHandler extends Thread {
             dos.writeBytes("Content-Length: " + httpResponse.getBody().length + "\r\n");
             dos.writeBytes("\r\n");
         } catch (IOException e) {
-            log.info("error header");
+            log.info("error header 200");
             log.error(e.getMessage());
         }
     }
@@ -104,7 +138,62 @@ public class RequestHandler extends Thread {
         }
     }
 
-    private void createUser(HttpRequest httpRequest) {
-        return;
+    private void response303Header(DataOutputStream dos, String redirectUrl) throws IOException {
+        try {
+            dos.writeBytes("HTTP/1.1 303 See Other \r\n");
+            dos.writeBytes("Location: " + redirectUrl + "\r\n");
+            dos.writeBytes("\r\n");
+        } catch (IOException e) {
+            log.info("error header 303");
+            log.error(e.getMessage());
+        }
+    }
+
+    private void createUser(HttpRequest httpRequest, OutputStream out) throws IOException {
+        DataOutputStream dos = new DataOutputStream(out);
+
+        Map<String, String> userInfo = httpRequest.getBody();
+        String userId = userInfo.get("userId");
+        String password = userInfo.get("password");
+        String name = userInfo.get("name");
+        String email = userInfo.get("email");
+
+        User user = new User(userId, password, name, email);
+
+        DataBase.addUser(user);
+
+        log.info("userID: {}", userId);
+        response303Header(dos, "../index.html");
+    }
+
+    private void login(HttpRequest httpRequest, OutputStream out) throws IOException {
+        DataOutputStream dos = new DataOutputStream(out);
+
+        Map<String, String> loginInfo = httpRequest.getBody();
+        String userId = loginInfo.get("userId");
+        String password = loginInfo.get("password");
+
+        User user = DataBase.findUserById(userId);
+        if (isValidUser(user, password)) {
+            response303HeaderWithCookie(dos, "../index.html", "logined=true");
+        } else {
+            response303HeaderWithCookie(dos, "login_failed.html", "logined=false");
+        }
+    }
+
+    private boolean isValidUser(User user, String password) {
+        return user != null && user.getUserId() != null && user.getPassword() != null && user.getPassword().equals(password);
+    }
+
+    private void response303HeaderWithCookie(DataOutputStream dos, String redirectUrl, String cookie) throws IOException {
+        try {
+            dos.writeBytes("HTTP/1.1 303 See Other \r\n");
+            dos.writeBytes("Location: " + redirectUrl + "\r\n");
+            dos.writeBytes("Set-cookie: " + cookie + "\r\n");
+                    dos.writeBytes("\r\n");
+        } catch (IOException e) {
+            log.info("error header 303 with cookie");
+            log.error(e.getMessage());
+        }
     }
 }
