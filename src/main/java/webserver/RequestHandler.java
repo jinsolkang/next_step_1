@@ -3,6 +3,8 @@ package webserver;
 import java.io.*;
 import java.net.Socket;
 import java.nio.file.Files;
+import java.util.HashMap;
+import java.util.Map;
 
 import model.HttpRequest;
 import model.HttpResponse;
@@ -13,6 +15,12 @@ public class RequestHandler extends Thread {
     private static final Logger log = LoggerFactory.getLogger(RequestHandler.class);
 
     private final Socket connection;
+
+    private static final Map<String, Runnable> urlMappings = new HashMap<>();
+
+    static {
+        urlMappings.put("POST/user/create", RequestHandler::createUser);
+    }
 
     public RequestHandler(Socket connectionSocket) {
         this.connection = connectionSocket;
@@ -25,13 +33,23 @@ public class RequestHandler extends Thread {
         try (InputStream in = connection.getInputStream(); OutputStream out = connection.getOutputStream()) {
             // TODO 사용자 요청에 대한 처리는 이 곳에 구현하면 된다.
             HttpRequest httpRequest = new HttpRequest(in);
-            if(httpRequest.getMethod().equals("GET")) {responseGet(out, httpRequest);}
+            handleRequest(out, httpRequest);
         } catch (IOException e) {
             log.error(e.getMessage());
         }
     }
 
-    private void responseGet(OutputStream out, HttpRequest httpRequest) throws IOException {
+    private void handleRequest(OutputStream out, HttpRequest httpRequest) throws IOException {
+        String key = httpRequest.getMethod() + httpRequest.getUrl();
+        Runnable runnable = urlMappings.get(key);
+        if (runnable != null) {
+            runnable.run();
+        } else {
+            defaultResponse(out, httpRequest);
+        }
+    }
+
+    private void defaultResponse(OutputStream out, HttpRequest httpRequest) throws IOException {
         DataOutputStream dos = new DataOutputStream(out);
         HttpResponse httpResponse = new HttpResponse();
 
@@ -84,5 +102,9 @@ public class RequestHandler extends Thread {
             log.info("error body");
             log.error(e.getMessage());
         }
+    }
+
+    private void createUser(HttpRequest httpRequest) {
+        return;
     }
 }
