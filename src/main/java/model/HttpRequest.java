@@ -68,6 +68,7 @@ public class HttpRequest {
         this.contentLength = fields.get("Content-Length") == null ? 0 : Integer.parseInt(fields.get("Content-Length"));
         this.contentType = fields.get("Content-type") == null ? "" : fields.get("Content-type");
         this.accept = fields.get("Accept") == null ? "" : fields.get("Accept");
+        this.cookie = fields.get("Cookie") == null ? "" : fields.get("Cookie");
     }
 
     private void setBody(BufferedReader br) throws IOException {

@@ -2,7 +2,11 @@ package webserver;
 
 import java.io.*;
 import java.net.Socket;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
@@ -27,6 +31,7 @@ public class RequestHandler extends Thread {
     static {
         urlMappings.put("POST/user/create", wrapException(INSTANCE::createUser));
         urlMappings.put("POST/user/login", wrapException(INSTANCE::login));
+        urlMappings.put("GET/user/list.html", wrapException(INSTANCE::getUserList));
     }
 
     private static <T, U> BiConsumer<T, U> wrapException(
@@ -67,6 +72,7 @@ public class RequestHandler extends Thread {
 
     private void handleRequest(HttpRequest httpRequest, OutputStream out) throws IOException {
         if(unauthorized(httpRequest)) {
+            log.info("Unauthorized Request: {}", httpRequest.getUrl());
             response303Header(new DataOutputStream(out), "/user/login.html");
             return;
         }
@@ -82,6 +88,8 @@ public class RequestHandler extends Thread {
 
     private boolean unauthorized(HttpRequest httpRequest) {
         String cookie = httpRequest.getCookie();
+        log.info("Cookie: {}", cookie);
+        log.info("boolean: {}", cookie.equals("logined=true"));
         return SecurityRules.isProtectedPage(httpRequest.getUrl()) &&
                 (cookie == null || !cookie.equals("logined=true"));
     }
@@ -156,7 +164,7 @@ public class RequestHandler extends Thread {
         String userId = userInfo.get("userId");
         String password = userInfo.get("password");
         String name = userInfo.get("name");
-        String email = userInfo.get("email");
+        String email = URLDecoder.decode(userInfo.get("email"), StandardCharsets.UTF_8);
 
         User user = new User(userId, password, name, email);
 
@@ -189,11 +197,49 @@ public class RequestHandler extends Thread {
         try {
             dos.writeBytes("HTTP/1.1 303 See Other \r\n");
             dos.writeBytes("Location: " + redirectUrl + "\r\n");
-            dos.writeBytes("Set-cookie: " + cookie + "\r\n");
+            dos.writeBytes("Set-cookie: " + cookie + "; Path=/\r\n");
                     dos.writeBytes("\r\n");
         } catch (IOException e) {
             log.info("error header 303 with cookie");
             log.error(e.getMessage());
         }
+    }
+
+    private void getUserList(HttpRequest httpRequest, OutputStream out) throws IOException {
+        DataOutputStream dos = new DataOutputStream(out);
+        HttpResponse httpResponse = new HttpResponse();
+
+        File file = getFile(httpRequest);
+        String fileContent = editListFile(file);
+
+        httpResponse.setContentType(Files.probeContentType(file.toPath()));
+        httpResponse.setBody(fileContent.getBytes());
+
+        response200Header(dos, httpResponse);
+        responseBody(dos, httpResponse);
+    }
+
+    private String editListFile(File file) throws IOException {
+        StringBuilder userList = new StringBuilder();
+        int idx = 3;
+
+        Collection<User> users = DataBase.findAll();
+
+        for(User user : users){
+            userList.append("<tr> <th scope=\"row\">")
+                    .append(idx)
+                    .append("</th> <td>")
+                    .append(user.getUserId())
+                    .append("</td> <td>")
+                    .append(user.getName())
+                    .append("</td> <td>")
+                    .append(user.getEmail())
+                    .append("</td><td><a href=\"#\" class=\"btn btn-success\" role=\"button\">수정</a></td> </tr>");
+            idx++;
+        }
+
+        String fileContent = Files.readString(file.toPath());
+
+        return fileContent.replace("${userList}", userList.toString());
     }
 }
